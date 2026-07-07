@@ -32,33 +32,30 @@ const COLORS = [
 ];
 
 const EMOJIS = ["👨","👩","🧒","👧","👦","🧑","👴","👵","🐶","🌟"];
-
 const MONTHS_FULL  = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Ags","Sep","Okt","Nov","Des"];
 const DAYS_SHORT   = ["Min","Sen","Sel","Rab","Kam","Jum","Sab"];
 
-// ── Supabase helpers ─────────────────────────────────────
-async function sbGet(table, query = "") {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${query}`, { headers: HEADERS });
+async function sbGet(path) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: HEADERS });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
-async function sbPost(table, data) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, { method: "POST", headers: HEADERS, body: JSON.stringify(data) });
+async function sbPost(path, data) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: "POST", headers: HEADERS, body: JSON.stringify(data) });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
-async function sbPatch(table, id, data) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: "PATCH", headers: HEADERS, body: JSON.stringify(data) });
+async function sbPatch(path, data) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: "PATCH", headers: HEADERS, body: JSON.stringify(data) });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
-async function sbDelete(table, id) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: HEADERS });
+async function sbDelete(path) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { method: "DELETE", headers: HEADERS });
   if (!res.ok) throw new Error(await res.text());
 }
 
-// ── Utils ─────────────────────────────────────────────────
 function todayStr() {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`;
@@ -75,217 +72,124 @@ function groupByDate(list) {
   return Object.entries(map).sort(([a],[b]) => a.localeCompare(b));
 }
 function slugify(str) {
-  return str.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") + "_" + Date.now();
+  return str.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"") + "_" + Date.now();
 }
 
-// ── Main App ──────────────────────────────────────────────
 export default function App() {
   const now = new Date();
   const TODAY = todayStr();
 
-  // data
   const [events, setEvents]     = useState([]);
   const [members, setMembers]   = useState(() => {
     try { return JSON.parse(localStorage.getItem("fs_members")) || DEFAULT_MEMBERS; } catch { return DEFAULT_MEMBERS; }
   });
   const [loading, setLoading]   = useState(true);
   const [errMsg, setErrMsg]     = useState(null);
-
-  // ui state
   const [filter, setFilter]     = useState("semua");
   const [tab, setTab]           = useState("list");
   const [calYear, setCalYear]   = useState(now.getFullYear());
   const [calMonth, setCalMonth] = useState(now.getMonth());
   const [calSel, setCalSel]     = useState(null);
-
-  // modals
-  const [modal, setModal]       = useState(null); // "add" | "edit" | "delete" | "checkin" | "pin" | "settings"
+  const [modal, setModal]       = useState(null);
   const [editEvent, setEditEvent] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
-  const [checkinTarget, setCheckinTarget] = useState(null);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState(false);
-  const [pinNext, setPinNext]   = useState(null); // what to open after PIN
-
-  // form
-  const emptyForm = { date: TODAY, timeStart: "", timeEnd: "", member: members[0]?.id || "dad", note: "", location: "", checkedIn: false };
-  const [form, setForm]         = useState(emptyForm);
-  const [saving, setSaving]     = useState(false);
-  const [locLoading, setLocLoading] = useState(false);
-
-  // settings
+  const [pinNext, setPinNext]   = useState(null);
   const [editMembers, setEditMembers] = useState([]);
+  const [saving, setSaving]     = useState(false);
 
-  // ── persist members ──────────────────────────────────────
+  const emptyForm = { date: TODAY, time: "", member: members[0]?.id || "dad", note: "" };
+  const [form, setForm] = useState(emptyForm);
+
   useEffect(() => {
     localStorage.setItem("fs_members", JSON.stringify(members));
   }, [members]);
 
-  function getMember(id) { return members.find(m => m.id === id) || { label: id, emoji: "👤", color: "#999", bg: "#eee" }; }
+  function getMember(id) {
+    return members.find(m => m.id === id) || { label: id, emoji: "👤", color: "#999", bg: "#eee" };
+  }
 
-  // ── Load events ──────────────────────────────────────────
   async function loadEvents() {
     setLoading(true); setErrMsg(null);
-    try { setEvents(await sbGet("events", "?order=date.asc,time_start.asc")); }
+    try { setEvents(await sbGet("events?order=date.asc,time.asc")); }
     catch { setErrMsg("Gagal memuat. Cek koneksi internet."); }
     finally { setLoading(false); }
   }
   useEffect(() => { loadEvents(); }, []);
 
-  // ── Add event ────────────────────────────────────────────
   async function addEvent() {
     if (!form.note.trim() || !form.date) return;
     setSaving(true);
     try {
-      const saved = await sbPost("events", {
-        member: form.member, date: form.date,
-        time_start: form.timeStart || null, time_end: form.timeEnd || null,
-        note: form.note, location: form.location || null, checked_in: false,
-      });
-      setEvents(prev => [...prev, ...(Array.isArray(saved) ? saved : [saved])].sort((a,b) => a.date.localeCompare(b.date) || (a.time_start||"").localeCompare(b.time_start||"")));
+      const saved = await sbPost("events", { member: form.member, date: form.date, time: form.time || null, note: form.note });
+      setEvents(prev => [...prev, ...(Array.isArray(saved) ? saved : [saved])].sort((a,b) => a.date.localeCompare(b.date) || (a.time||"").localeCompare(b.time||"")));
       setForm(emptyForm);
       setModal(null);
     } catch(e) { alert("Gagal menyimpan: " + e.message); }
     finally { setSaving(false); }
   }
 
-  // ── Edit event ───────────────────────────────────────────
   function openEdit(ev) {
     setEditEvent(ev);
-    setForm({ date: ev.date, timeStart: ev.time_start||"", timeEnd: ev.time_end||"", member: ev.member, note: ev.note, location: ev.location||"", checkedIn: ev.checked_in||false });
+    setForm({ date: ev.date, time: ev.time||"", member: ev.member, note: ev.note });
     setModal("edit");
   }
+
   async function saveEdit() {
     if (!form.note.trim() || !form.date) return;
     setSaving(true);
     try {
-      const updated = await sbPatch("events", editEvent.id, {
-        member: form.member, date: form.date,
-        time_start: form.timeStart || null, time_end: form.timeEnd || null,
-        note: form.note, location: form.location || null,
-      });
-      setEvents(prev => prev.map(e => e.id === editEvent.id ? { ...e, ...form, time_start: form.timeStart||null, time_end: form.timeEnd||null, location: form.location||null } : e));
+      await sbPatch(`events?id=eq.${editEvent.id}`, { member: form.member, date: form.date, time: form.time||null, note: form.note });
+      setEvents(prev => prev.map(e => e.id === editEvent.id ? { ...e, ...form, time: form.time||null } : e));
       setModal(null);
     } catch(e) { alert("Gagal menyimpan: " + e.message); }
     finally { setSaving(false); }
   }
 
-  // ── Delete event ─────────────────────────────────────────
   function askDelete(ev) { setDeleteTarget(ev); setModal("delete"); }
   async function confirmDelete() {
     setEvents(prev => prev.filter(e => e.id !== deleteTarget.id));
     setModal(null);
-    try { await sbDelete("events", deleteTarget.id); }
+    try { await sbDelete(`events?id=eq.${deleteTarget.id}`); }
     catch { loadEvents(); }
   }
 
-  // ── Check-in ─────────────────────────────────────────────
-  function openCheckin(ev) { setCheckinTarget(ev); setModal("checkin"); }
-  async function doCheckin() {
-    setLocLoading(true);
-    try {
-      let locStr = checkinTarget.location || "";
-      if (navigator.geolocation) {
-        await new Promise(resolve => {
-          navigator.geolocation.getCurrentPosition(pos => {
-            locStr = `📍 ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
-            resolve();
-          }, () => resolve(), { timeout: 5000 });
-        });
-      }
-      const now2 = new Date();
-      const timeStr = `${String(now2.getHours()).padStart(2,"0")}:${String(now2.getMinutes()).padStart(2,"0")}`;
-      const checkinNote = `✓ Sampai jam ${timeStr}${locStr ? " · " + locStr : ""}`;
-      await sbPatch("events", checkinTarget.id, { checked_in: true, checkin_note: checkinNote });
-      setEvents(prev => prev.map(e => e.id === checkinTarget.id ? { ...e, checked_in: true, checkin_note: checkinNote } : e));
-      setModal(null);
-    } catch(e) { alert("Gagal check-in."); }
-    finally { setLocLoading(false); }
-  }
-
-  // ── PIN ──────────────────────────────────────────────────
   function requirePin(next) { setPinInput(""); setPinError(false); setPinNext(next); setModal("pin"); }
   function checkPin() {
     if (pinInput === ADMIN_PIN) { setModal(pinNext); setPinNext(null); }
     else { setPinError(true); setPinInput(""); }
   }
 
-  // ── Settings / members ───────────────────────────────────
   function openSettings() {
     setEditMembers(members.map(m => ({ ...m })));
     requirePin("settings");
   }
   function saveMemberEdit(i, field, val) {
-    setEditMembers(prev => prev.map((m, idx) => idx === i ? { ...m, [field]: val } : m));
+    setEditMembers(prev => prev.map((m, idx) => idx===i ? { ...m, [field]: val } : m));
   }
   function addMember() {
     const c = COLORS[editMembers.length % COLORS.length];
     setEditMembers(prev => [...prev, { id: slugify("anggota"), label: "Nama Baru", emoji: "🧒", color: c.color, bg: c.bg }]);
   }
-  function removeMember(i) { setEditMembers(prev => prev.filter((_,idx) => idx !== i)); }
+  function removeMember(i) { setEditMembers(prev => prev.filter((_,idx) => idx!==i)); }
   function saveSettings() { setMembers(editMembers); setModal(null); }
 
-  // ── Get location for form ────────────────────────────────
-  function getLocation() {
-    if (!navigator.geolocation) { alert("GPS tidak tersedia di browser ini."); return; }
-    setLocLoading(true);
-    navigator.geolocation.getCurrentPosition(pos => {
-      setForm(f => ({ ...f, location: `${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}` }));
-      setLocLoading(false);
-    }, () => { alert("Tidak bisa ambil lokasi."); setLocLoading(false); }, { timeout: 8000 });
-  }
-
-  // ── Calendar ─────────────────────────────────────────────
   const totalDays = daysInMonth(calYear, calMonth);
   const startDay  = firstDayOf(calYear, calMonth);
   function calDs(d) { return `${calYear}-${String(calMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`; }
-  function calDayEvs(d) { return events.filter(e => e.date === calDs(d) && (filter==="semua" || e.member===filter)); }
+  function calDayEvs(d) { return events.filter(e => e.date===calDs(d) && (filter==="semua"||e.member===filter)); }
   const calSelEvs = calSel ? events.filter(e => e.date===calSel && (filter==="semua"||e.member===filter)) : [];
   function prevCal() { calMonth===0 ? (setCalMonth(11),setCalYear(calYear-1)) : setCalMonth(calMonth-1); }
   function nextCal() { calMonth===11 ? (setCalMonth(0),setCalYear(calYear+1)) : setCalMonth(calMonth+1); }
 
-  // ── Derived ───────────────────────────────────────────────
   const visible  = events.filter(e => filter==="semua" || e.member===filter);
   const upcoming = visible.filter(e => e.date >= TODAY);
   const past     = visible.filter(e => e.date < TODAY);
 
-  // ── Shared styles ─────────────────────────────────────────
-  const inp = { width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #D0DDEF", fontSize:14, boxSizing:"border-box", background:"#fff", color:"#1A2340", marginBottom:10, outline:"none" };
+  const inp  = { width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #D0DDEF", fontSize:14, boxSizing:"border-box", background:"#fff", color:"#1A2340", marginBottom:10, outline:"none" };
   const pill = (a,c,bg) => ({ padding:"5px 14px", borderRadius:20, border:"none", cursor:"pointer", whiteSpace:"nowrap", fontWeight:700, fontSize:13, background:a?c:bg||"#EEF3FC", color:a?"#fff":c, flexShrink:0 });
 
-  // ── Event Card ────────────────────────────────────────────
-  function EventCard({ ev }) {
-    const m = getMember(ev.member);
-    const timeLabel = ev.time_start ? (ev.time_end ? `⏰ ${ev.time_start} – ${ev.time_end}` : `⏰ ${ev.time_start}`) : null;
-    return (
-      <div style={{ display:"flex", gap:12, alignItems:"flex-start", background:m.bg, borderRadius:14, padding:"12px 14px", marginBottom:9, boxShadow:"0 1px 4px rgba(74,123,200,0.07)" }}>
-        <div style={{ width:40, height:40, borderRadius:10, background:m.color, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", color:"#fff", fontWeight:800, fontSize:16, flexShrink:0 }}>
-          <span>{m.emoji}</span>
-          <span style={{fontSize:9,marginTop:1}}>{m.label}</span>
-        </div>
-        <div style={{flex:1, minWidth:0}}>
-          <div style={{fontWeight:700,fontSize:15,color:"#1A2340"}}>{ev.note}</div>
-          <div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
-            <span style={{display:"inline-block",padding:"2px 8px",borderRadius:6,background:"#fff",color:m.color,fontSize:11,fontWeight:700}}>{m.label}</span>
-            {timeLabel && <span style={{fontSize:12,color:"#8A9BBC"}}>{timeLabel}</span>}
-          </div>
-          {ev.location && <div style={{fontSize:12,color:"#8A9BBC",marginTop:3}}>📍 {ev.location}</div>}
-          {ev.checked_in && <div style={{fontSize:12,color:"#5BAD8C",marginTop:3,fontWeight:600}}>{ev.checkin_note || "✓ Sudah sampai"}</div>}
-          {!ev.checked_in && ev.date >= TODAY && (
-            <button onClick={()=>openCheckin(ev)} style={{marginTop:6,background:"#5BAD8C",color:"#fff",border:"none",borderRadius:8,padding:"4px 10px",cursor:"pointer",fontSize:12,fontWeight:700}}>
-              📍 Sudah Sampai
-            </button>
-          )}
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
-          <button onClick={()=>openEdit(ev)} style={{background:"#EEF3FC",border:"none",borderRadius:7,padding:"4px 8px",cursor:"pointer",fontSize:13,color:"#4A7BC8"}}>✏️</button>
-          <button onClick={()=>askDelete(ev)} style={{background:"#FEE2E2",border:"none",borderRadius:7,padding:"4px 8px",cursor:"pointer",fontSize:13,color:"#E84A4A"}}>🗑️</button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Form fields (shared add/edit) ─────────────────────────
   function FormFields() {
     return (
       <>
@@ -298,40 +202,19 @@ export default function App() {
             </button>
           ))}
         </div>
-
         <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>TANGGAL</div>
         <input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={inp}/>
-
-        <div style={{display:"flex",gap:8}}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>JAM MULAI</div>
-            <input type="time" value={form.timeStart} onChange={e=>setForm(f=>({...f,timeStart:e.target.value}))} style={inp}/>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>JAM SELESAI</div>
-            <input type="time" value={form.timeEnd} onChange={e=>setForm(f=>({...f,timeEnd:e.target.value}))} style={inp}/>
-          </div>
-        </div>
-
+        <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>JAM (opsional)</div>
+        <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))} style={inp}/>
         <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>KETERANGAN</div>
         <input type="text" placeholder="Contoh: Les piano, Vaksin..." value={form.note}
-          onChange={e=>setForm(f=>({...f,note:e.target.value}))} style={inp}/>
-
-        <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>LOKASI (opsional)</div>
-        <div style={{display:"flex",gap:8,marginBottom:10}}>
-          <input type="text" placeholder="Nama tempat / alamat" value={form.location}
-            onChange={e=>setForm(f=>({...f,location:e.target.value}))}
-            style={{...inp,marginBottom:0,flex:1}}/>
-          <button onClick={getLocation} disabled={locLoading}
-            style={{background:"#EEF3FC",border:"none",borderRadius:10,padding:"0 12px",cursor:"pointer",fontSize:18,flexShrink:0,opacity:locLoading?0.6:1}}>
-            {locLoading?"⏳":"📍"}
-          </button>
-        </div>
+          onChange={e=>setForm(f=>({...f,note:e.target.value}))}
+          onKeyDown={e=>e.key==="Enter"&&(modal==="edit"?saveEdit():addEvent())}
+          style={inp}/>
       </>
     );
   }
 
-  // ── Modal wrapper ─────────────────────────────────────────
   function Modal({ children, onClose }) {
     return (
       <div onClick={e=>{if(e.target===e.currentTarget)onClose();}}
@@ -343,7 +226,29 @@ export default function App() {
     );
   }
 
-  // ── Render ────────────────────────────────────────────────
+  function EventCard({ ev }) {
+    const m = getMember(ev.member);
+    return (
+      <div style={{display:"flex",gap:12,alignItems:"flex-start",background:m.bg,borderRadius:14,padding:"12px 14px",marginBottom:9,boxShadow:"0 1px 4px rgba(74,123,200,0.07)"}}>
+        <div style={{width:40,height:40,borderRadius:10,background:m.color,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:16,flexShrink:0}}>
+          <span>{m.emoji}</span>
+          <span style={{fontSize:9,marginTop:1}}>{m.label}</span>
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:15,color:"#1A2340"}}>{ev.note}</div>
+          <div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
+            <span style={{display:"inline-block",padding:"2px 8px",borderRadius:6,background:"#fff",color:m.color,fontSize:11,fontWeight:700}}>{m.label}</span>
+            {ev.time && <span style={{fontSize:12,color:"#8A9BBC"}}>⏰ {ev.time}</span>}
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
+          <button onClick={()=>openEdit(ev)} style={{background:"#EEF3FC",border:"none",borderRadius:7,padding:"4px 8px",cursor:"pointer",fontSize:13}}>✏️</button>
+          <button onClick={()=>askDelete(ev)} style={{background:"#FEE2E2",border:"none",borderRadius:7,padding:"4px 8px",cursor:"pointer",fontSize:13}}>🗑️</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{minHeight:"100vh",background:"#F0F4FA",fontFamily:"'Segoe UI',system-ui,sans-serif",color:"#1A2340",maxWidth:480,margin:"0 auto"}}>
 
@@ -472,12 +377,12 @@ export default function App() {
         </button>
       )}
 
-      {/* ── MODAL: ADD ── */}
+      {/* MODAL: ADD */}
       {modal==="add" && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{fontWeight:800,fontSize:17,marginBottom:16,color:"#1A2340"}}>➕ Tambah Jadwal</div>
           <FormFields/>
-          <div style={{display:"flex",gap:10,marginTop:4}}>
+          <div style={{display:"flex",gap:10}}>
             <button onClick={addEvent} disabled={saving} style={{flex:1,background:"#4A7BC8",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15,opacity:saving?0.7:1}}>
               {saving?"Menyimpan...":"✓ Simpan"}
             </button>
@@ -486,12 +391,12 @@ export default function App() {
         </Modal>
       )}
 
-      {/* ── MODAL: EDIT ── */}
+      {/* MODAL: EDIT */}
       {modal==="edit" && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{fontWeight:800,fontSize:17,marginBottom:16,color:"#1A2340"}}>✏️ Edit Jadwal</div>
           <FormFields/>
-          <div style={{display:"flex",gap:10,marginTop:4}}>
+          <div style={{display:"flex",gap:10}}>
             <button onClick={saveEdit} disabled={saving} style={{flex:1,background:"#4A7BC8",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15,opacity:saving?0.7:1}}>
               {saving?"Menyimpan...":"✓ Simpan"}
             </button>
@@ -500,7 +405,7 @@ export default function App() {
         </Modal>
       )}
 
-      {/* ── MODAL: DELETE CONFIRM ── */}
+      {/* MODAL: DELETE */}
       {modal==="delete" && deleteTarget && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{textAlign:"center",padding:"8px 0 16px"}}>
@@ -516,26 +421,7 @@ export default function App() {
         </Modal>
       )}
 
-      {/* ── MODAL: CHECK-IN ── */}
-      {modal==="checkin" && checkinTarget && (
-        <Modal onClose={()=>setModal(null)}>
-          <div style={{textAlign:"center",padding:"8px 0 16px"}}>
-            <div style={{fontSize:40,marginBottom:12}}>📍</div>
-            <div style={{fontWeight:800,fontSize:17,color:"#1A2340",marginBottom:8}}>Sudah Sampai?</div>
-            <div style={{fontSize:14,color:"#8A9BBC",marginBottom:4}}>{checkinTarget.note}</div>
-            {checkinTarget.location && <div style={{fontSize:13,color:"#8A9BBC",marginBottom:4}}>📍 {checkinTarget.location}</div>}
-            <div style={{fontSize:13,color:"#8A9BBC",marginBottom:20}}>Lokasi GPS akan otomatis tercatat.</div>
-            <div style={{display:"flex",gap:10}}>
-              <button onClick={doCheckin} disabled={locLoading} style={{flex:1,background:"#5BAD8C",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15,opacity:locLoading?0.7:1}}>
-                {locLoading?"Mencatat...":"✓ Sudah Sampai!"}
-              </button>
-              <button onClick={()=>setModal(null)} style={{flex:1,background:"#EEF3FC",color:"#4A7BC8",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Batal</button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* ── MODAL: PIN ── */}
+      {/* MODAL: PIN */}
       {modal==="pin" && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{textAlign:"center",padding:"8px 0 16px"}}>
@@ -554,7 +440,7 @@ export default function App() {
         </Modal>
       )}
 
-      {/* ── MODAL: SETTINGS ── */}
+      {/* MODAL: SETTINGS */}
       {modal==="settings" && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{fontWeight:800,fontSize:17,marginBottom:16,color:"#1A2340"}}>⚙️ Kelola Anggota</div>

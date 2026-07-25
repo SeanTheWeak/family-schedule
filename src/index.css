@@ -1,0 +1,45 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; padding: 0; background: #2E3B36; }
+body { -webkit-font-smoothing: antialiased; }
+
+::selection { background: #D64545; color: #FBF7EE; }
+
+.fs-scroll::-webkit-scrollbar { display: none; }
+.fs-scroll { scrollbar-width: none; }
+
+.fs-field, .fs-btn, .fs-swatch {
+  font-family: inherit;
+}
+.fs-field:focus-visible,
+.fs-btn:focus-visible,
+.fs-swatch:focus-visible,
+.fs-tab:focus-visible {
+  outline: 2px solid #D64545;
+  outline-offset: 2px;
+}
+
+@media (hover: hover) {
+  .fs-btn:hover { filter: brightness(1.06); }
+  .fs-card:hover { transform: translateY(-1px) rotate(var(--tilt, 0deg)); }
+}
+
+@keyframes fsFadeUp {
+  from { opacity: 0; transform: translateY(8px) rotate(var(--tilt, 0deg)); }
+  to   { opacity: 1; transform: translateY(0) rotate(var(--tilt, 0deg)); }
+}
+@keyframes fsFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fsSheetUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fs-enter { animation: fsFadeUp 0.4s ease both; }
+.fs-fade { animation: fsFadeIn 0.2s ease both; }
+.fs-sheet { animation: fsSheetUp 0.28s cubic-bezier(.2,.8,.3,1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-enter, .fs-fade, .fs-sheet { animation: none !important; }
+  .fs-card:hover { transform: none !important; }
+}

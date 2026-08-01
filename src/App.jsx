@@ -36,6 +36,8 @@ const EMOJIS = ["👨","👩","🧒","👧","👦","🧑","👴","👵","🐶","
 const MONTHS_FULL  = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Ags","Sep","Okt","Nov","Des"];
 const DAYS_SHORT   = ["Min","Sen","Sel","Rab","Kam","Jum","Sab"];
+const REPEAT_OPTIONS = [["none","Once"],["daily","Daily"],["weekly","Weekly"],["monthly","Monthly"]];
+const MAX_REPEAT_OCCURRENCES = 60;
 
 const inp = { width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #D0DDEF", fontSize:14, boxSizing:"border-box", background:"#fff", color:"#1A2340", marginBottom:10, outline:"none" };
 const pill = (a,c,bg) => ({ padding:"5px 14px", borderRadius:20, border:"none", cursor:"pointer", whiteSpace:"nowrap", fontWeight:700, fontSize:13, background:a?c:bg||"#EEF3FC", color:a?"#fff":c, flexShrink:0 });
@@ -78,6 +80,22 @@ function groupByDate(list) {
 function slugify(str) {
   return str.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"") + "_" + Date.now();
 }
+// Generate list of date strings for a repeating event
+function generateRepeatDates(startDate, repeatType, repeatUntil) {
+  if (repeatType === "none" || !repeatUntil) return [startDate];
+  const dates = [];
+  let cur = new Date(startDate + "T00:00:00");
+  const end = new Date(repeatUntil + "T00:00:00");
+  while (cur <= end && dates.length < MAX_REPEAT_OCCURRENCES) {
+    const ds = `${cur.getFullYear()}-${String(cur.getMonth()+1).padStart(2,"0")}-${String(cur.getDate()).padStart(2,"0")}`;
+    dates.push(ds);
+    if (repeatType === "daily") cur.setDate(cur.getDate()+1);
+    else if (repeatType === "weekly") cur.setDate(cur.getDate()+7);
+    else if (repeatType === "monthly") cur.setMonth(cur.getMonth()+1);
+    else break;
+  }
+  return dates;
+}
 
 // ── Moved OUTSIDE App to fix input focus bug ──────────────
 function Modal({ children, onClose }) {
@@ -91,7 +109,7 @@ function Modal({ children, onClose }) {
   );
 }
 
-function FormFields({ form, setForm, members, modal, onSubmit }) {
+function FormFields({ form, setForm, members, modal, onSubmit, showRepeat }) {
   return (
     <>
       <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:6}}>FOR WHO</div>
@@ -107,6 +125,32 @@ function FormFields({ form, setForm, members, modal, onSubmit }) {
       <input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={inp}/>
       <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>TIME (optional)</div>
       <input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))} style={inp}/>
+
+      {showRepeat && (
+        <>
+          <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>REPEAT</div>
+          <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+            {REPEAT_OPTIONS.map(([val,label])=>(
+              <button key={val} onClick={()=>setForm(f=>({...f,repeat:val}))} style={pill(form.repeat===val,"#4A7BC8")}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {form.repeat!=="none" && (
+            <>
+              <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>REPEAT UNTIL</div>
+              <input type="date" value={form.repeatUntil} min={form.date}
+                onChange={e=>setForm(f=>({...f,repeatUntil:e.target.value}))} style={inp}/>
+            </>
+          )}
+        </>
+      )}
+
+      <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,fontSize:13,color:"#1A2340",fontWeight:600,cursor:"pointer"}}>
+        <input type="checkbox" checked={form.reminder} onChange={e=>setForm(f=>({...f,reminder:e.target.checked}))} style={{width:16,height:16}}/>
+        🔔 Remind me 30 minutes before
+      </label>
+
       <div style={{fontSize:12,fontWeight:700,color:"#8A9BBC",marginBottom:4}}>DESCRIPTION</div>
       <input
         type="text"
@@ -134,6 +178,8 @@ function EventCard({ ev, members, onEdit, onDelete }) {
         <div style={{marginTop:4,display:"flex",flexWrap:"wrap",gap:4,alignItems:"center"}}>
           <span style={{display:"inline-block",padding:"2px 8px",borderRadius:6,background:"#fff",color:m.color,fontSize:11,fontWeight:700}}>{m.label}</span>
           {ev.time && <span style={{fontSize:12,color:"#8A9BBC"}}>⏰ {ev.time}</span>}
+          {ev.repeat_type && ev.repeat_type!=="none" && <span style={{fontSize:12,color:"#8A9BBC"}}>🔁</span>}
+          {ev.reminder && <span style={{fontSize:12,color:"#8A9BBC"}}>🔔</span>}
         </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
@@ -167,8 +213,11 @@ export default function App() {
   const [pinNext, setPinNext]     = useState(null);
   const [editMembers, setEditMembers] = useState([]);
   const [saving, setSaving]       = useState(false);
+  const [notifPermission, setNotifPermission] = useState(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "unsupported"
+  );
 
-  const emptyForm = { date: TODAY, time: "", member: members[0]?.id || "dad", note: "" };
+  const emptyForm = { date: TODAY, time: "", member: members[0]?.id || "dad", note: "", repeat: "none", repeatUntil: "", reminder: false };
   const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
@@ -183,12 +232,58 @@ export default function App() {
   }
   useEffect(() => { loadEvents(); }, []);
 
+  // 🔔 Reminder checker — fires a browser notification 30 min before an event.
+  // Only works while this app/tab is open (foreground or backgrounded), not when fully closed.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (typeof window === "undefined" || !("Notification" in window)) return;
+      if (Notification.permission !== "granted") return;
+      const nowTs = new Date();
+      events.forEach(ev => {
+        if (!ev.reminder || !ev.time) return;
+        const evDateTime = new Date(`${ev.date}T${ev.time}`);
+        const diffMin = (evDateTime - nowTs) / 60000;
+        const key = `notified_${ev.id}_${ev.date}`;
+        if (diffMin <= 30 && diffMin > 28.5 && !sessionStorage.getItem(key)) {
+          const m = members.find(x => x.id === ev.member) || { label: ev.member };
+          try {
+            new Notification(`⏰ ${ev.note}`, {
+              body: `${m.label} — starts in 30 minutes (${ev.time})`,
+            });
+          } catch {}
+          sessionStorage.setItem(key, "1");
+        }
+      });
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [events, members]);
+
+  function requestNotifPermission() {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      alert("Browser ini tidak mendukung notifikasi.");
+      return;
+    }
+    Notification.requestPermission().then(setNotifPermission);
+  }
+
   async function addEvent() {
     if (!form.note.trim() || !form.date) return;
     setSaving(true);
     try {
-      const saved = await sbPost("events", { member: form.member, date: form.date, time: form.time||null, note: form.note });
-      setEvents(prev => [...prev, ...(Array.isArray(saved)?saved:[saved])].sort((a,b)=>a.date.localeCompare(b.date)||(a.time||"").localeCompare(b.time||"")));
+      const dates = generateRepeatDates(form.date, form.repeat, form.repeatUntil);
+      const repeatGroup = dates.length > 1 ? slugify("rep") : null;
+      const rows = dates.map(d => ({
+        member: form.member,
+        date: d,
+        time: form.time || null,
+        note: form.note,
+        repeat_type: form.repeat,
+        repeat_group: repeatGroup,
+        reminder: form.reminder,
+      }));
+      const saved = await sbPost("events", rows);
+      const savedArr = Array.isArray(saved) ? saved : [saved];
+      setEvents(prev => [...prev, ...savedArr].sort((a,b)=>a.date.localeCompare(b.date)||(a.time||"").localeCompare(b.time||"")));
       setForm(emptyForm);
       setModal(null);
     } catch(e) { alert("Failed to save: " + e.message); }
@@ -197,14 +292,14 @@ export default function App() {
 
   function openEdit(ev) {
     setEditEvent(ev);
-    setForm({ date:ev.date, time:ev.time||"", member:ev.member, note:ev.note });
+    setForm({ date:ev.date, time:ev.time||"", member:ev.member, note:ev.note, repeat:"none", repeatUntil:"", reminder: ev.reminder||false });
     setModal("edit");
   }
   async function saveEdit() {
     if (!form.note.trim() || !form.date) return;
     setSaving(true);
     try {
-      await sbPatch(`events?id=eq.${editEvent.id}`, { member:form.member, date:form.date, time:form.time||null, note:form.note });
+      await sbPatch(`events?id=eq.${editEvent.id}`, { member:form.member, date:form.date, time:form.time||null, note:form.note, reminder:form.reminder });
       setEvents(prev => prev.map(e => e.id===editEvent.id ? {...e,...form,time:form.time||null} : e));
       setModal(null);
     } catch(e) { alert("Failed to save: " + e.message); }
@@ -212,11 +307,19 @@ export default function App() {
   }
 
   function askDelete(ev) { setDeleteTarget(ev); setModal("delete"); }
-  async function confirmDelete() {
-    setEvents(prev => prev.filter(e => e.id!==deleteTarget.id));
-    setModal(null);
-    try { await sbDelete(`events?id=eq.${deleteTarget.id}`); }
-    catch { loadEvents(); }
+  async function confirmDelete(scope) {
+    if (scope === "future" && deleteTarget.repeat_group) {
+      const toRemove = events.filter(e => e.repeat_group === deleteTarget.repeat_group && e.date >= deleteTarget.date).map(e=>e.id);
+      setEvents(prev => prev.filter(e => !toRemove.includes(e.id)));
+      setModal(null);
+      try { await sbDelete(`events?repeat_group=eq.${deleteTarget.repeat_group}&date=gte.${deleteTarget.date}`); }
+      catch { loadEvents(); }
+    } else {
+      setEvents(prev => prev.filter(e => e.id!==deleteTarget.id));
+      setModal(null);
+      try { await sbDelete(`events?id=eq.${deleteTarget.id}`); }
+      catch { loadEvents(); }
+    }
   }
 
   function requirePin(next) { setPinInput(""); setPinError(false); setPinNext(next); setModal("pin"); }
@@ -257,9 +360,14 @@ export default function App() {
 
       {/* Header */}
       <div style={{background:"#fff",borderBottom:"1px solid #E2EAF4",padding:"14px 18px",position:"sticky",top:0,zIndex:10}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
           <div style={{fontSize:20,fontWeight:800,color:"#1A2340",letterSpacing:-0.5}}>🏠 Family Schedule</div>
-          <button onClick={openSettings} style={{background:"#EEF3FC",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:13,color:"#4A7BC8",fontWeight:700}}>⚙️ Settings</button>
+          <div style={{display:"flex",gap:6,flexShrink:0}}>
+            {notifPermission!=="granted" && notifPermission!=="unsupported" && (
+              <button onClick={requestNotifPermission} style={{background:"#FDF4E1",border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:13,color:"#E8A825",fontWeight:700}}>🔔 Enable Alerts</button>
+            )}
+            <button onClick={openSettings} style={{background:"#EEF3FC",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:13,color:"#4A7BC8",fontWeight:700}}>⚙️ Settings</button>
+          </div>
         </div>
         <div style={{fontSize:12,color:"#8A9BBC",marginTop:2,display:"flex",alignItems:"center",gap:8}}>
           {members.map(m=>m.label).join(" · ")}
@@ -384,7 +492,7 @@ export default function App() {
       {modal==="add" && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{fontWeight:800,fontSize:17,marginBottom:16,color:"#1A2340"}}>➕ Add Schedule</div>
-          <FormFields form={form} setForm={setForm} members={members} modal={modal} onSubmit={addEvent}/>
+          <FormFields form={form} setForm={setForm} members={members} modal={modal} onSubmit={addEvent} showRepeat={true}/>
           <div style={{display:"flex",gap:10}}>
             <button onClick={addEvent} disabled={saving} style={{flex:1,background:"#4A7BC8",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15,opacity:saving?0.7:1}}>
               {saving?"Saving...":"✓ Save"}
@@ -398,7 +506,7 @@ export default function App() {
       {modal==="edit" && (
         <Modal onClose={()=>setModal(null)}>
           <div style={{fontWeight:800,fontSize:17,marginBottom:16,color:"#1A2340"}}>✏️ Edit Schedule</div>
-          <FormFields form={form} setForm={setForm} members={members} modal={modal} onSubmit={saveEdit}/>
+          <FormFields form={form} setForm={setForm} members={members} modal={modal} onSubmit={saveEdit} showRepeat={false}/>
           <div style={{display:"flex",gap:10}}>
             <button onClick={saveEdit} disabled={saving} style={{flex:1,background:"#4A7BC8",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15,opacity:saving?0.7:1}}>
               {saving?"Saving...":"✓ Save"}
@@ -416,10 +524,18 @@ export default function App() {
             <div style={{fontWeight:800,fontSize:17,color:"#1A2340",marginBottom:8}}>Delete Schedule?</div>
             <div style={{fontSize:14,color:"#8A9BBC",marginBottom:4}}>{deleteTarget.note}</div>
             <div style={{fontSize:13,color:"#8A9BBC",marginBottom:20}}>{formatDate(deleteTarget.date)}</div>
-            <div style={{display:"flex",gap:10}}>
-              <button onClick={confirmDelete} style={{flex:1,background:"#E84A4A",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Yes, Delete</button>
-              <button onClick={()=>setModal(null)} style={{flex:1,background:"#EEF3FC",color:"#4A7BC8",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Cancel</button>
-            </div>
+            {deleteTarget.repeat_group ? (
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <button onClick={()=>confirmDelete("one")} style={{background:"#E84A4A",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Delete just this one</button>
+                <button onClick={()=>confirmDelete("future")} style={{background:"#E84A4A",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Delete this & all future in series</button>
+                <button onClick={()=>setModal(null)} style={{background:"#EEF3FC",color:"#4A7BC8",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Cancel</button>
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={()=>confirmDelete("one")} style={{flex:1,background:"#E84A4A",color:"#fff",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Yes, Delete</button>
+                <button onClick={()=>setModal(null)} style={{flex:1,background:"#EEF3FC",color:"#4A7BC8",border:"none",borderRadius:12,padding:"13px 0",cursor:"pointer",fontWeight:700,fontSize:15}}>Cancel</button>
+              </div>
+            )}
           </div>
         </Modal>
       )}
